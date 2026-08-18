@@ -18,16 +18,56 @@ The Worker generates a fresh 1200×630 PNG for each tracked petition at `/og/<pe
 
 ## Architecture
 
-```text
-Cron Trigger (every 3 minutes)
-        │
-        ▼
-Cloudflare Worker ──────► Public Majlis petition pages
-        │
-        ├───────────────► D1: petitions, snapshots, status events
-        │
-        ├───────────────► Worker Static Assets: HTML, CSS, JavaScript
-        └───────────────► Dynamic SEO metadata, sitemap, and social images
+```mermaid
+flowchart TD
+  subgraph collection["1 · Scheduled collection"]
+    cron["Cron Trigger<br/>Every 3 minutes"] --> urls["Read PETITION_URLS"]
+    urls --> source["Fetch each public Majlis petition page"]
+    source --> parsed{"Fetch and parse successful?"}
+    parsed -- "Yes" --> compare["Compare with the previous record"]
+    compare --> store["Upsert petition and add snapshot"]
+    store --> changes{"Status or milestone changed?"}
+    changes -- "Yes" --> event["Add status event"]
+    changes -- "No" --> collected["Collection complete"]
+    event --> collected
+    parsed -- "No" --> failure["Record source error and failure count"]
+  end
+
+  store --> d1[("Cloudflare D1")]
+  event --> d1
+  failure --> d1
+
+  subgraph delivery["2 · Dashboard and crawler requests"]
+    request["Incoming request"] --> worker["Cloudflare Worker router"]
+    worker --> route{"Request route"}
+
+    route -- "/" --> pageData["Read selected petition from D1"]
+    pageData --> metadata["Inject title, canonical, Open Graph and JSON-LD"]
+    metadata --> shell["Return dashboard HTML shell"]
+
+    route -- "/api/*" --> query["Query petitions, snapshots and events"]
+    query --> json["Return JSON"]
+
+    route -- "/og/*.png" --> imageData["Read current totals and recent snapshots"]
+    imageData --> image["Generate and cache 1200×630 social PNG"]
+
+    route -- "/sitemap.xml or /robots.txt" --> discovery["Return crawler discovery files"]
+    route -- "Static asset" --> assets["Return CSS, JavaScript, fonts or favicon"]
+  end
+
+  d1 --> pageData
+  d1 --> query
+  d1 --> imageData
+  d1 --> discovery
+
+  shell --> browser["Browser loads dashboard"]
+  assets --> browser
+  browser -->|"Fetch live statistics"| request
+  json --> browser
+
+  metadata --> crawler["Search and social crawler"]
+  image --> crawler
+  discovery --> crawler
 ```
 
 There is no framework build, external chart service, paid queue, or always-on server. Static files are served from `public/`; API, page metadata, sitemap, robots, and social-image requests run through the Worker first.
