@@ -1,4 +1,5 @@
 import { fetchPetition, parsePetitionUrls, type PetitionSnapshot } from "./petition";
+import { buildSeoMetadata, renderOpenGraphPng, type SeoPetitionRecord } from "./seo";
 
 interface Env {
   DB: D1Database;
@@ -26,6 +27,9 @@ const API_HEADERS = {
   "Cache-Control": "no-store",
   "X-Content-Type-Options": "nosniff",
 };
+
+const SEO_PETITION_FIELDS = `uuid, source_url, reference_number, title, status, public_status,
+  signed_count, categories_json, published_at, last_fetched_at, last_changed_at`;
 
 function json(value: unknown, init: ResponseInit = {}): Response {
   return new Response(JSON.stringify(value), {
@@ -247,6 +251,141 @@ function decodeJsonFields(row: Record<string, unknown>): Record<string, unknown>
   return row;
 }
 
+async function findSeoPetition(env: Env, uuid?: string | null): Promise<SeoPetitionRecord | null> {
+  if (uuid && /^[0-9a-f-]{36}$/i.test(uuid)) {
+    const petition = await env.DB.prepare(`SELECT ${SEO_PETITION_FIELDS} FROM petitions WHERE uuid = ?`)
+      .bind(uuid.toLowerCase())
+      .first<SeoPetitionRecord>();
+    if (petition) return petition;
+  }
+  return env.DB.prepare(
+    `SELECT ${SEO_PETITION_FIELDS} FROM petitions ORDER BY last_changed_at DESC LIMIT 1`,
+  ).first<SeoPetitionRecord>();
+}
+
+function seoAttribute(name: string, value: string) {
+  return {
+    element(element: Element) {
+      element.setAttribute(name, value);
+    },
+  };
+}
+
+async function serveSeoPage(request: Request, env: Env): Promise<Response> {
+  const requestUrl = new URL(request.url);
+  let petition: SeoPetitionRecord | null = null;
+  try {
+    petition = await findSeoPetition(env, requestUrl.searchParams.get("petition"));
+  } catch (error) {
+    console.warn("SEO metadata fell back to site defaults", error);
+  }
+  const seo = buildSeoMetadata(requestUrl.origin, petition);
+  const assetUrl = new URL("/", requestUrl.origin);
+  const assetResponse = await env.ASSETS.fetch(new Request(assetUrl, request));
+  if (!assetResponse.ok || !assetResponse.body) return assetResponse;
+
+  const headers = new Headers(assetResponse.headers);
+  headers.set("Cache-Control", "public, max-age=0, s-maxage=300, stale-while-revalidate=600");
+  headers.set("Link", `<${seo.canonicalUrl}>; rel="canonical"`);
+  const htmlResponse = new Response(assetResponse.body, {
+    status: assetResponse.status,
+    statusText: assetResponse.statusText,
+    headers,
+  });
+
+  return new HTMLRewriter()
+    .on("title", { element: (element) => { element.setInnerContent(seo.title); } })
+    .on("#seo-description", seoAttribute("content", seo.description))
+    .on("#seo-canonical", seoAttribute("href", seo.canonicalUrl))
+    .on("#seo-og-title", seoAttribute("content", seo.title))
+    .on("#seo-og-description", seoAttribute("content", seo.description))
+    .on("#seo-og-url", seoAttribute("content", seo.canonicalUrl))
+    .on("#seo-og-image", seoAttribute("content", seo.imageUrl))
+    .on("#seo-og-image-alt", seoAttribute("content", seo.imageAlt))
+    .on("#seo-twitter-title", seoAttribute("content", seo.title))
+    .on("#seo-twitter-description", seoAttribute("content", seo.description))
+    .on("#seo-twitter-image", seoAttribute("content", seo.imageUrl))
+    .on("#seo-twitter-image-alt", seoAttribute("content", seo.imageAlt))
+    .on("#seo-json-ld", { element: (element) => { element.setInnerContent(seo.jsonLd, { html: true }); } })
+    .transform(htmlResponse);
+}
+
+async function serveOpenGraphImage(
+  request: Request,
+  env: Env,
+  context: ExecutionContext,
+  identifier: string,
+): Promise<Response> {
+  const cache = (caches as CacheStorage & { default: Cache }).default;
+  const cached = await cache.match(request);
+  if (cached) return cached;
+
+  let petition: SeoPetitionRecord | null = null;
+  if (identifier !== "default") {
+    if (!/^[0-9a-f-]{36}$/i.test(identifier)) return new Response("Not found", { status: 404 });
+    petition = await env.DB.prepare(`SELECT ${SEO_PETITION_FIELDS} FROM petitions WHERE uuid = ?`)
+      .bind(identifier.toLowerCase())
+      .first<SeoPetitionRecord>();
+    if (!petition) return new Response("Petition not found", { status: 404 });
+  }
+
+  const history = petition
+    ? await env.DB.prepare(
+        `SELECT signed_count FROM snapshots WHERE petition_uuid = ? ORDER BY captured_at DESC LIMIT 48`,
+      )
+        .bind(petition.uuid)
+        .all<{ signed_count: number }>()
+    : { results: [] as Array<{ signed_count: number }> };
+  const png = await renderOpenGraphPng(
+    petition,
+    [...history.results].reverse().map((snapshot) => Number(snapshot.signed_count)),
+  );
+  const versioned = new URL(request.url).searchParams.has("v");
+  const response = new Response(png.buffer as ArrayBuffer, {
+    headers: {
+      "Content-Type": "image/png",
+      "Content-Length": String(png.byteLength),
+      "Cache-Control": versioned
+        ? "public, max-age=31536000, immutable"
+        : "public, max-age=300, stale-while-revalidate=3600",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
+  context.waitUntil(cache.put(request, response.clone()));
+  return response;
+}
+
+function xmlEscape(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/\"/g, "&quot;");
+}
+
+async function serveSitemap(requestUrl: URL, env: Env): Promise<Response> {
+  let petitions: Array<{ uuid: string; last_fetched_at: string | null }> = [];
+  try {
+    const result = await env.DB.prepare(
+      "SELECT uuid, last_fetched_at FROM petitions ORDER BY published_at DESC",
+    ).all<{ uuid: string; last_fetched_at: string | null }>();
+    petitions = result.results;
+  } catch (error) {
+    console.warn("Sitemap generated without petition records", error);
+  }
+  const urls = [
+    `<url><loc>${xmlEscape(`${requestUrl.origin}/`)}</loc></url>`,
+    ...petitions.map((petition) => {
+      const location = `${requestUrl.origin}/?petition=${encodeURIComponent(petition.uuid)}`;
+      const lastModified = petition.last_fetched_at?.slice(0, 10);
+      return `<url><loc>${xmlEscape(location)}</loc>${lastModified ? `<lastmod>${xmlEscape(lastModified)}</lastmod>` : ""}</url>`;
+    }),
+  ].join("");
+  return new Response(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls}</urlset>`, {
+    headers: {
+      "Content-Type": "application/xml; charset=utf-8",
+      "Cache-Control": "public, max-age=900",
+      "X-Content-Type-Options": "nosniff",
+    },
+  });
+}
+
 async function listPetitions(env: Env): Promise<Response> {
   const { results } = await env.DB.prepare(
     `SELECT p.*, s.last_error, s.consecutive_failures
@@ -371,7 +510,7 @@ async function handleApi(request: Request, env: Env): Promise<Response> {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, context: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/api/")) {
       try {
@@ -380,6 +519,29 @@ export default {
         console.error("API request failed", error);
         return apiError("The tracker could not complete this request");
       }
+    }
+    if (request.method === "GET" && url.pathname === "/") {
+      return serveSeoPage(request, env);
+    }
+    const openGraphMatch = url.pathname.match(/^\/og\/(default|[0-9a-f-]{36})\.png$/i);
+    if (request.method === "GET" && openGraphMatch) {
+      try {
+        return await serveOpenGraphImage(request, env, context, openGraphMatch[1]);
+      } catch (error) {
+        console.error("Open Graph image generation failed", error);
+        return new Response("Image generation failed", { status: 500 });
+      }
+    }
+    if (request.method === "GET" && url.pathname === "/robots.txt") {
+      return new Response(`User-agent: *\nAllow: /\n\nSitemap: ${url.origin}/sitemap.xml\n`, {
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "Cache-Control": "public, max-age=86400",
+        },
+      });
+    }
+    if (request.method === "GET" && url.pathname === "/sitemap.xml") {
+      return serveSitemap(url, env);
     }
     return env.ASSETS.fetch(request);
   },

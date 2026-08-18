@@ -10,6 +10,12 @@ The project is designed for Cloudflare's free tier and uses Bun for local toolin
 
 _Screenshot uses a generic petition identity and simulated signature history; it does not show a real petition record._
 
+### Social preview
+
+![Dynamically generated Open Graph card using generic petition data](docs/seo-preview.png)
+
+The Worker generates a fresh 1200×630 PNG for each tracked petition at `/og/<petition-uuid>.png`. The example above uses generic data.
+
 ## Architecture
 
 ```text
@@ -20,10 +26,24 @@ Cloudflare Worker ──────► Public Majlis petition pages
         │
         ├───────────────► D1: petitions, snapshots, status events
         │
-        └───────────────► Worker Static Assets: HTML, CSS, JavaScript
+        ├───────────────► Worker Static Assets: HTML, CSS, JavaScript
+        └───────────────► Dynamic SEO metadata, sitemap, and social images
 ```
 
-There is no framework build, external chart service, paid queue, or always-on server. Static files are served from `public/`; requests under `/api/*` run through the Worker first.
+There is no framework build, external chart service, paid queue, or always-on server. Static files are served from `public/`; API, page metadata, sitemap, robots, and social-image requests run through the Worker first.
+
+## Search and social metadata
+
+The Worker renders crawler-visible metadata from the latest D1 record before returning the page:
+
+- Petition-specific titles and descriptions
+- Self-referencing canonical URLs
+- Open Graph and X/Twitter large-image tags
+- `WebPage`, `WebSite`, and petition-statistics `Dataset` JSON-LD
+- A dynamic 1200×630 PNG showing the reference, status, signature count, and recent trend
+- `/robots.txt` and `/sitemap.xml`, including every tracked petition URL
+
+Social-image URLs are versioned when petition data changes and cached at the edge. Image generation uses the Worker runtime only; it does not require Cloudflare Images, Browser Rendering, R2, or a third-party service.
 
 ## What is tracked
 
