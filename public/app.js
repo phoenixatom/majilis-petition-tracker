@@ -1,5 +1,9 @@
 import { buildDailySeries, buildFiveMinuteSeries, buildHourlySeries, robustPeriodStats } from "./analytics.js";
 
+if (new URLSearchParams(location.search).get("theme") === "light") {
+  document.documentElement.dataset.theme = "light";
+}
+
 const state = {
   petitions: [],
   activeId: null,
@@ -17,7 +21,6 @@ const elements = {
   picker: document.querySelector("#petition-picker"),
   navReference: document.querySelector("#petition-reference-nav"),
   status: document.querySelector("#status-badge"),
-  reference: document.querySelector("#reference-number"),
   title: document.querySelector("#petition-title"),
   categoryList: document.querySelector("#category-list"),
   publishedDate: document.querySelector("#published-date"),
@@ -32,8 +35,10 @@ const elements = {
   expiryNote: document.querySelector("#expiry-note"),
   trendSummary: document.querySelector("#trend-summary"),
   lineChart: document.querySelector("#line-chart"),
+  fiveMinuteHeading: document.querySelector("#five-minute-heading"),
   fiveMinuteChart: document.querySelector("#five-minute-chart"),
   fiveMinuteSummary: document.querySelector("#five-minute-summary"),
+  hourlyHeading: document.querySelector("#hourly-heading"),
   hourlyChart: document.querySelector("#hourly-chart"),
   hourlySummary: document.querySelector("#hourly-summary"),
   dailyChart: document.querySelector("#daily-chart"),
@@ -52,12 +57,6 @@ const dateOnly = new Intl.DateTimeFormat("en-GB", {
   year: "numeric",
 });
 const clockTime = new Intl.DateTimeFormat("en-GB", {
-  timeZone: MALDIVES_TIME_ZONE,
-  hour: "2-digit",
-  minute: "2-digit",
-  hour12: false,
-});
-const axisTime = new Intl.DateTimeFormat("en-GB", {
   timeZone: MALDIVES_TIME_ZONE,
   hour: "2-digit",
   minute: "2-digit",
@@ -163,7 +162,6 @@ function renderHero(petition) {
   const title = String(petition.title || "Untitled petition");
   elements.status.textContent = labelStatus(status);
   elements.status.classList.toggle("closed", Boolean(petition.is_closed || petition.is_expired));
-  elements.reference.textContent = petition.reference_number || "Public petition";
   elements.title.textContent = title;
   elements.title.dir = /[\u0780-\u07bf]/u.test(title) ? "rtl" : "ltr";
   elements.source.href = petition.source_url;
@@ -299,19 +297,27 @@ function renderLineChart(snapshots) {
     class: "chart-axis",
   }));
 
-  const elapsed = maxTime - minTime;
-  const timeFormatter = elapsed <= 48 * 3_600_000 ? axisTime : shortDate;
-  for (let tick = 0; tick <= 4; tick += 1) {
-    const tickTime = minTime + ((maxTime - minTime) * tick) / 4;
+  const observedDays = [];
+  for (const time of times) {
+    const date = new Date(time);
+    const key = dateOnly.format(date);
+    if (observedDays.at(-1)?.key !== key) observedDays.push({ key, time, date });
+  }
+  const dayTicks = observedDays.length <= 5
+    ? observedDays
+    : Array.from({ length: 5 }, (_, index) => observedDays[Math.round((index * (observedDays.length - 1)) / 4)]);
+  if (dayTicks.length === 1) dayTicks[0] = { ...dayTicks[0], time: minTime + (maxTime - minTime) / 2 };
+
+  dayTicks.forEach((tick, index) => {
     const label = svgElement("text", {
-      x: padding.left + (innerWidth * tick) / 4,
+      x: x(tick.time),
       y: height - 12,
-      "text-anchor": tick === 0 ? "start" : tick === 4 ? "end" : "middle",
+      "text-anchor": index === 0 && dayTicks.length > 1 ? "start" : index === dayTicks.length - 1 && dayTicks.length > 1 ? "end" : "middle",
       class: "chart-label",
     });
-    label.textContent = timeFormatter.format(new Date(tickTime));
+    label.textContent = shortDate.format(tick.date);
     svg.append(label);
-  }
+  });
 
   const yCaption = svgElement("text", {
     x: padding.left,
@@ -320,15 +326,6 @@ function renderLineChart(snapshots) {
   });
   yCaption.textContent = "Total signatures";
   svg.append(yCaption);
-  const xCaption = svgElement("text", {
-    x: width - padding.right,
-    y: height - 1,
-    "text-anchor": "end",
-    class: "chart-caption",
-  });
-  xCaption.textContent = "Maldives Time";
-  svg.append(xCaption);
-
   if (!isBaseline) {
     const areaPoints = [
       `${x(times[0])},${padding.top + innerHeight}`,
@@ -366,12 +363,14 @@ function renderLineChart(snapshots) {
   elements.lineChart.append(svg);
 
   if (isBaseline) {
-    elements.trendSummary.textContent = `Baseline captured ${formatDate(snapshots[0].captured_at)}. Growth appears after the next reading.`;
+    elements.trendSummary.textContent = `Baseline captured ${dateOnly.format(new Date(times[0]))}. Growth appears after the next reading.`;
     elements.lineChart.setAttribute("aria-label", `Baseline of ${number.format(values[0])} signatures at ${formatDate(snapshots[0].captured_at)}`);
   } else {
     const change = values.at(-1) - values[0];
-    const trackedHours = (times.at(-1) - times[0]) / 3_600_000;
-    elements.trendSummary.textContent = `${change >= 0 ? "+" : ""}${number.format(change)} net signatures over ${formatDuration(trackedHours)}, from ${formatDate(snapshots[0].captured_at)} to ${formatDate(snapshots.at(-1).captured_at)}.`;
+    const firstDate = dateOnly.format(new Date(times[0]));
+    const lastDate = dateOnly.format(new Date(times.at(-1)));
+    const dateRange = firstDate === lastDate ? `on ${firstDate}` : `from ${firstDate} to ${lastDate}`;
+    elements.trendSummary.textContent = `${change >= 0 ? "+" : ""}${number.format(change)} net signatures ${dateRange}.`;
     elements.lineChart.setAttribute("aria-label", `Signature count changed by ${number.format(change)} across ${number.format(snapshots.length)} readings`);
   }
 }
@@ -380,7 +379,17 @@ function niceAxisMaximum(value) {
   if (value <= 5) return Math.max(1, Math.ceil(value));
   const magnitude = 10 ** Math.floor(Math.log10(value));
   const normalized = value / magnitude;
-  const step = normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10;
+  const step = normalized <= 1
+    ? 1
+    : normalized <= 2
+      ? 2
+      : normalized <= 2.5
+        ? 2.5
+        : normalized <= 4
+          ? 4
+          : normalized <= 5
+            ? 5
+            : 10;
   return step * magnitude;
 }
 
@@ -388,9 +397,7 @@ function movementSummary(stats, unit, series, minimumSamples) {
   const noun = unit === "hour" ? "hour" : unit === "day" ? "day" : "5-min period";
   const plural = noun === "5-min period" ? "5-min periods" : `${noun}s`;
   const partial = series.some((period) => period.partial && Number.isFinite(period.value));
-  const hasGaps = series.some((period) => period.status === "missing");
-  const gapDescription = unit === "five-minute" ? "baseline dots mark missing readings" : "dots mark missing readings";
-  const context = [partial ? `Current ${noun} is partial` : null, hasGaps ? gapDescription : null]
+  const context = [partial ? `Current ${noun} is partial` : null]
     .filter(Boolean)
     .join(" · ");
   if (!stats.measuredCount) return `Baseline collected; movement appears as readings arrive${context ? ` · ${context}` : ""}.`;
@@ -398,8 +405,7 @@ function movementSummary(stats, unit, series, minimumSamples) {
     return `${number.format(stats.measuredCount)} observed ${stats.measuredCount === 1 ? noun : plural} · Spike comparison starts after ${number.format(minimumSamples)} complete ${plural}${context ? ` · ${context}` : ""}.`;
   }
   const spikes = stats.spikeStarts.size;
-  const rateLabel = unit === "five-minute" ? "5 min" : noun;
-  return `Typical ${number.format(stats.median)} per ${rateLabel} · Peak ${number.format(stats.peak)} · ${number.format(spikes)} ${spikes === 1 ? "spike" : "spikes"} flagged${context ? ` · ${context}` : ""}.`;
+  return `Peak ${number.format(stats.peak)} · ${number.format(spikes)} ${spikes === 1 ? "spike" : "spikes"} flagged${context ? ` · ${context}` : ""}.`;
 }
 
 function renderMovementChart(element, summaryElement, series, xFormatter, unit, minimumSamples = 6, chartType = "bar") {
@@ -417,8 +423,11 @@ function renderMovementChart(element, summaryElement, series, xFormatter, unit, 
   summaryElement.textContent = movementSummary(stats, unit, series, minimumSamples);
   const widthLimit = chartType === "line" ? 1200 : 620;
   const width = Math.min(widthLimit, Math.max(280, Math.round(element.clientWidth || 540)));
-  const height = 210;
-  const padding = { top: 20, right: 10, bottom: 42, left: 48 };
+  const compact = width < 500;
+  const height = compact ? 170 : 210;
+  const padding = compact
+    ? { top: 17, right: 6, bottom: 32, left: 40 }
+    : { top: 20, right: 10, bottom: 42, left: 48 };
   const innerWidth = width - padding.left - padding.right;
   const innerHeight = height - padding.top - padding.bottom;
   const values = series.filter((period) => Number.isFinite(period.value)).map((period) => period.value);
@@ -465,25 +474,6 @@ function renderMovementChart(element, summaryElement, series, xFormatter, unit, 
     y2: padding.top + innerHeight,
     class: "chart-axis",
   }));
-
-  if (stats.ready && stats.median > 0) {
-    const typicalY = y(stats.median);
-    svg.append(svgElement("line", {
-      x1: padding.left,
-      x2: width - padding.right,
-      y1: typicalY,
-      y2: typicalY,
-      class: "movement-typical",
-    }));
-    const typicalLabel = svgElement("text", {
-      x: width - padding.right,
-      y: Math.max(padding.top + 10, typicalY - 5),
-      "text-anchor": "end",
-      class: "chart-caption",
-    });
-    typicalLabel.textContent = `Typical ${number.format(stats.median)}`;
-    svg.append(typicalLabel);
-  }
 
   const slotWidth = innerWidth / series.length;
   const barWidth = Math.max(2, Math.min(22, slotWidth * 0.68));
@@ -541,7 +531,7 @@ function renderMovementChart(element, summaryElement, series, xFormatter, unit, 
       const point = svgElement("circle", {
         cx: center,
         cy: y(period.value),
-        r: stats.spikeStarts.has(period.start) ? 4 : 3,
+        r: stats.spikeStarts.has(period.start) ? (compact ? 3 : 4) : compact ? 2 : 3,
         class: classes.join(" "),
       });
       const tooltip = svgElement("title");
@@ -594,15 +584,6 @@ function renderMovementChart(element, summaryElement, series, xFormatter, unit, 
   const yCaption = svgElement("text", { x: padding.left, y: 11, class: "chart-caption" });
   yCaption.textContent = "New signatures";
   svg.append(yCaption);
-  const xCaption = svgElement("text", {
-    x: width - padding.right,
-    y: height - 1,
-    "text-anchor": "end",
-    class: "chart-caption",
-  });
-  xCaption.textContent = "Maldives Time";
-  svg.append(xCaption);
-
   element.append(svg);
   const measured = series.filter((period) => Number.isFinite(period.value)).length;
   const adjective = unit === "hour" ? "hourly" : unit === "day" ? "daily" : "5-minute";
@@ -610,10 +591,16 @@ function renderMovementChart(element, summaryElement, series, xFormatter, unit, 
 }
 
 function renderFiveMinuteChart(snapshots) {
+  const compact = elements.fiveMinuteChart.clientWidth < 500;
+  const series = buildFiveMinuteSeries(snapshots);
+  const visibleSeries = compact ? series.slice(-24) : series;
+  elements.fiveMinuteHeading.textContent = compact
+    ? "5-minute signatures · past 2 hours"
+    : "5-minute signatures · past 6 hours";
   renderMovementChart(
     elements.fiveMinuteChart,
     elements.fiveMinuteSummary,
-    buildFiveMinuteSeries(snapshots),
+    visibleSeries,
     fiveMinuteChartTime,
     "five-minute",
     12,
@@ -622,10 +609,16 @@ function renderFiveMinuteChart(snapshots) {
 }
 
 function renderHourlyChart(snapshots) {
+  const compact = elements.hourlyChart.clientWidth < 500;
+  const series = buildHourlySeries(snapshots);
+  const visibleSeries = compact ? series.slice(-12) : series;
+  elements.hourlyHeading.textContent = compact
+    ? "Hourly signatures · past 12 hours"
+    : "Hourly signatures · past 24 hours";
   renderMovementChart(
     elements.hourlyChart,
     elements.hourlySummary,
-    buildHourlySeries(snapshots),
+    visibleSeries,
     hourChartTime,
     "hour",
   );

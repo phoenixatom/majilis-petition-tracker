@@ -4,6 +4,12 @@ An independent time-series monitor for public [People's Majlis e-petitions](http
 
 The project is designed for Cloudflare's free tier and uses Bun for local tooling.
 
+## Preview
+
+![Majlis Petition Monitor dashboard populated with simulated demo data](docs/dashboard-preview.jpg)
+
+_Screenshot uses a generic petition identity and simulated signature history; it does not show a real petition record._
+
 ## Architecture
 
 ```text
