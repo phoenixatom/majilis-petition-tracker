@@ -1,0 +1,5 @@
+# Comma- or newline-separated public Majlis petition URLs.
+PETITION_URLS="https://epetition.majlis.gov.mv/petitions/d996985f-8128-4957-82c1-8bf719001203"
+
+# Optional. When set, POST /api/refresh requires: Authorization: Bearer <value>
+# REFRESH_TOKEN="generate-a-long-random-value"

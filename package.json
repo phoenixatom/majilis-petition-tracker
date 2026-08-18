@@ -1,0 +1,23 @@
+{
+  "name": "majlis-petition-tracker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "bun@1.3.8",
+  "scripts": {
+    "dev": "wrangler dev --test-scheduled",
+    "deploy": "wrangler deploy",
+    "db:create": "wrangler d1 create majlis-petition-tracker",
+    "db:migrate:local": "wrangler d1 migrations apply majlis-petition-tracker --local",
+    "db:migrate:remote": "wrangler d1 migrations apply majlis-petition-tracker --remote",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "bun run typecheck && bun run test"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260818.1",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.30.0"
+  }
+}

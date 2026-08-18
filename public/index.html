@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Independent time-series tracking for People's Majlis e-petitions." />
+    <meta name="theme-color" content="#f7f6f3" />
+    <title>Majlis Petition Monitor</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/styles.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <nav class="navbar" aria-label="Primary navigation">
+        <a class="wordmark" href="/" aria-label="Majlis Petition Monitor home">
+          <span class="wordmark-title">Petition Monitor</span>
+        </a>
+        <div class="header-tools">
+          <label class="petition-picker-label" for="petition-picker">Tracked petition</label>
+          <select id="petition-picker" class="petition-picker" hidden disabled>
+            <option>Loading petition…</option>
+          </select>
+          <span id="petition-reference-nav" class="petition-reference-nav">Loading…</span>
+        </div>
+      </nav>
+    </header>
+
+    <main>
+      <section id="loading-state" class="state-panel" aria-live="polite">
+        <p class="eyebrow">Public record</p>
+        <h1>Reading the latest petition record.</h1>
+      </section>
+
+      <section id="error-state" class="state-panel" hidden>
+        <p class="eyebrow">Tracker unavailable</p>
+        <h1>We could not load this record.</h1>
+        <p id="error-message" class="state-copy"></p>
+        <button id="retry-button" class="primary-button" type="button">Try again</button>
+      </section>
+
+      <section id="empty-state" class="state-panel" hidden>
+        <p class="eyebrow">No snapshots yet</p>
+        <h1>The tracker is ready to collect its first reading.</h1>
+        <p class="state-copy">Run the scheduled handler once locally, or wait for the first deployed 3-minute collection.</p>
+      </section>
+
+      <article id="dashboard" hidden>
+        <header class="petition-hero reveal">
+          <div class="hero-meta">
+            <span id="status-badge" class="status-badge">Status</span>
+            <span id="reference-number" class="reference-number"></span>
+          </div>
+          <h1 id="petition-title" class="petition-title" dir="auto"></h1>
+          <div class="hero-footer">
+            <div class="petition-context">
+              <div id="category-list" class="category-list" aria-label="Petition categories"></div>
+              <p class="published-meta"><span>Published</span><time id="published-date"></time></p>
+            </div>
+            <a id="source-link" class="source-link" href="#" target="_blank" rel="noreferrer">View official petition <span aria-hidden="true">↗</span></a>
+          </div>
+        </header>
+
+        <section class="stat-grid reveal" aria-label="Current petition statistics">
+          <article class="stat-card stat-card-primary">
+            <p class="stat-label">Signatures</p>
+            <p id="signature-count" class="stat-value">—</p>
+            <p id="signature-note" class="stat-note">Latest verified reading</p>
+          </article>
+          <article class="stat-card">
+            <p id="change-period-label" class="stat-label">Last 24 hours</p>
+            <p id="daily-change" class="stat-value">—</p>
+            <p id="daily-change-note" class="stat-note">Signature change</p>
+          </article>
+          <article class="stat-card">
+            <p class="stat-label">Average pace</p>
+            <p id="hourly-rate" class="stat-value">—</p>
+            <p class="stat-note">Signatures per hour</p>
+          </article>
+          <article class="stat-card">
+            <p class="stat-label">Time remaining</p>
+            <p id="days-remaining" class="stat-value">—</p>
+            <p id="expiry-note" class="stat-note">Until the listed deadline</p>
+          </article>
+        </section>
+
+        <section class="chart-card reveal" aria-labelledby="trend-heading">
+          <div class="section-heading-row">
+            <div>
+              <p class="eyebrow">Time series</p>
+              <h2 id="trend-heading">Signature growth</h2>
+            </div>
+            <div class="range-control" aria-label="Chart date range">
+              <button type="button" data-range="7d" aria-pressed="false">7D</button>
+              <button type="button" data-range="30d" aria-pressed="false">30D</button>
+              <button type="button" data-range="90d" aria-pressed="false">90D</button>
+              <button type="button" data-range="all" class="active" aria-pressed="true">All</button>
+            </div>
+          </div>
+          <div id="trend-summary" class="trend-summary"></div>
+          <div id="line-chart" class="chart-wrap" role="img" aria-label="Signature count over time"></div>
+        </section>
+
+        <section class="detail-grid reveal">
+          <article class="detail-card growth-card five-minute-card">
+            <div class="section-heading-row compact">
+              <div>
+                <p class="eyebrow">Live movement</p>
+                <h2>New signatures · every 5 minutes</h2>
+              </div>
+            </div>
+            <p id="five-minute-summary" class="movement-summary"></p>
+            <div id="five-minute-chart" class="movement-chart" role="img" aria-label="New signatures grouped into 5-minute periods over the past 6 hours"></div>
+          </article>
+
+          <article class="detail-card growth-card">
+            <div class="section-heading-row compact">
+              <div>
+                <p class="eyebrow">Hourly movement</p>
+                <h2>New signatures · past 24 hours</h2>
+              </div>
+            </div>
+            <p id="hourly-summary" class="movement-summary"></p>
+            <div id="hourly-chart" class="movement-chart" role="img" aria-label="New signatures grouped by hour"></div>
+          </article>
+
+          <article class="detail-card growth-card">
+            <div class="section-heading-row compact">
+              <div>
+                <p class="eyebrow">Daily movement</p>
+                <h2>New signatures by day</h2>
+              </div>
+            </div>
+            <p id="daily-summary" class="movement-summary"></p>
+            <div id="daily-chart" class="movement-chart" role="img" aria-label="New signatures grouped by day"></div>
+          </article>
+
+          <article class="detail-card">
+            <p class="eyebrow">Thresholds</p>
+            <h2>Petition milestones</h2>
+            <div id="threshold-list" class="threshold-list"></div>
+          </article>
+
+          <article class="detail-card record-card">
+            <section>
+              <p class="eyebrow">Current record</p>
+              <h2>Petition details</h2>
+              <dl id="metadata-list" class="metadata-list"></dl>
+            </section>
+          </article>
+        </section>
+      </article>
+    </main>
+
+    <footer class="site-footer">
+      <p>Independent monitor using public data from the People's Majlis e-petition portal.</p>
+      <p>Statistics update every 3 minutes · Times shown in Maldives Time.</p>
+    </footer>
+  </body>
+</html>
